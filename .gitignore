@@ -1,0 +1,79 @@
+############################
+# Node dependencies
+############################
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+############################
+# Environment variables
+############################
+.env
+.env.*
+!.env.example
+
+############################
+# Build / dist
+############################
+dist/
+build/
+
+############################
+# Logs
+############################
+logs/
+*.log
+
+############################
+# OS / Editor files
+############################
+.DS_Store
+Thumbs.db
+
+.vscode/
+!.vscode/extensions.json
+.idea/
+
+############################
+# Sequelize
+############################
+sequelize-meta.json
+
+############################
+# Database
+############################
+*.sqlite
+*.sqlite3
+
+############################
+# Coverage / Tests
+############################
+coverage/
+.nyc_output/
+
+############################
+# Temporary / Cache
+############################
+tmp/
+temp/
+.cache/
+
+############################
+# Uploads (if using local storage)
+############################
+uploads/
+public/uploads/
+
+############################
+# Secrets / Keys
+############################
+*.pem
+*.key
+*.crt
+
+############################
+# Docker
+############################
+docker-data/
