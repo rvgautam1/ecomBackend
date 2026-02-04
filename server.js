@@ -18,6 +18,7 @@ import orderRoutes from "./src/routes/orderRoutes.js";
 import analyticsRoutes from "./src/routes/analyticsRoutes.js"
 
 import walletRoutes from "./src/routes/walletRoutes.js"
+import giftCardRoutes from "./src/routes/giftCardRoutes.js"
 
 // Load env variables
 dotenv.config();
@@ -45,6 +46,7 @@ app.use("/api/cart", cartRoutes);
 app.use("/api/orders", orderRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/gift-cards', giftCardRoutes);
 
 // Health check
 app.get("/", (req, res) => {

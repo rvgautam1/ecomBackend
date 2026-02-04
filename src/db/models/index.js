@@ -57,6 +57,7 @@ import Order from "./Order.js";
 import OrderItem from "./OrderItem.js";
 import Wallet from "./Wallet.js";
 import WalletTransaction from "./WalletTransaction.js";
+import GiftCard from "./GiftCard.js";
 /* =======================
    ASSOCIATIONS
 ======================= */
@@ -163,6 +164,15 @@ Wallet.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 Wallet.hasMany(WalletTransaction, { foreignKey: 'wallet_id', as: 'transactions' });
 WalletTransaction.belongsTo(Wallet, { foreignKey: 'wallet_id', as: 'wallet' });
 
+// Gift Card associations
+User.hasMany(GiftCard, { foreignKey: 'issued_by', as: 'issuedGiftCards' });
+
+User.hasMany(GiftCard, { foreignKey: 'redeemed_by', as: 'redeemedGiftCards' });
+
+GiftCard.belongsTo(User, { foreignKey: 'issued_by', as: 'issuer' });
+
+GiftCard.belongsTo(User, { foreignKey: 'redeemed_by', as: 'redeemer' });
+
 export {
   sequelize,
   User,
@@ -174,5 +184,5 @@ export {
   Wishlist,
   Cart,
   Order,
-  OrderItem,Wallet,WalletTransaction
+  OrderItem,Wallet,WalletTransaction, GiftCard
 };
