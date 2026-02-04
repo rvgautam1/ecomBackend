@@ -22,7 +22,7 @@ export const registerSchema = {
     },
     role: {
       type: 'string',
-      enum: ['user', 'vendor'],
+      enum: ['user', 'vendor','admin'],
       default: 'user'
     },
     phone: {

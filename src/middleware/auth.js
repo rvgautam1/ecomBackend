@@ -1,5 +1,5 @@
 import { verifyToken } from "../config/jwt.js";
-
+import CustomError from "../utils/customError.js";
 
 export const authenticateUser = async (req, res, next) => {
   try {

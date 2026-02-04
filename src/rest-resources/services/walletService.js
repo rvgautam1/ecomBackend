@@ -1,4 +1,4 @@
-
+import { where } from "sequelize";
 import {
   Wallet,
   WalletTransaction,
@@ -7,7 +7,7 @@ import {
   Order,
 } from "../../db/models/index.js";
 import CustomError from "../../utils/customError.js";
-
+import { Transaction } from "sequelize";
 
 class WalletService {
   // create wallet for user
@@ -72,13 +72,14 @@ class WalletService {
     let attempt = 0;
     while (attempt < maxRetries) {
       const transaction = await sequelize.transaction({
-        isolationLevel: sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE,
+        isolationLevel: Transaction.ISOLATION_LEVELS.SERIALIZABLE,
       });
 
       try {
+        // read current wallet state 
         let wallet = await Wallet.findOne({
           where: { user_id: userId },
-          lock: transaction.LOCK.UPDATE,
+          lock: transaction.LOCK.UPDATE, // lock the transaction for perticular process 
           transaction,
         });
 
@@ -95,13 +96,13 @@ class WalletService {
           throw CustomError.badRequest("Wallet is inactive");
         }
 
+          // version check + calculate new balance
         const currentVersion = wallet.version;
         const balanceBefore = parseFloat(wallet.balance);
         const creditAmount = parseFloat(amount);
         const balanceAfter = balanceBefore + creditAmount;
 
         // update with version check
-
         const [updatedRows] = await Wallet.update(
           {
             balance: balanceAfter,
@@ -184,7 +185,7 @@ class WalletService {
     let attempt = 0;
     while (attempt < maxRetries) {
       const transaction = await sequelize.transaction({
-        isolationLevel: sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE,
+        isolationLevel: Transaction.ISOLATION_LEVELS.SERIALIZABLE,
       });
 
       try {
@@ -466,41 +467,34 @@ class WalletService {
     );
   }
 
+  // Add Cashback
 
-
-// Add Cashback 
-
-async addCashBack(userId , orderId , amount , description){
+  async addCashBack(userId, orderId, amount, description) {
     return await this.creaditWallet(
-        userId,
-        amount ,
-        'cashback',
-        description||`Cashback for order #${orderId}`,
-        {
-            reference_type : 'orders',
-            reference_id: orderId
-        }
-    )
-}
+      userId,
+      amount,
+      "cashback",
+      description || `Cashback for order #${orderId}`,
+      {
+        reference_type: "orders",
+        reference_id: orderId,
+      },
+    );
+  }
 
-// Process order payment from wallet
-async processOrderPayment(userId , orderId , amount){
-
+  // Process order payment from wallet
+  async processOrderPayment(userId, orderId, amount) {
     return await this.debitWallet(
-        userId ,
-        amount,
-        'Order_payment',
-        `Payment for order #${orderId}`,
-        {
-            reference_type : 'orders',
-            reference_id : orderId
-        }
-    )
-
+      userId,
+      amount,
+      "Order_payment",
+      `Payment for order #${orderId}`,
+      {
+        reference_type: "orders",
+        reference_id: orderId,
+      },
+    );
+  }
 }
-
-
-}
-
 
 export default new WalletService();
