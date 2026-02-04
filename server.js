@@ -17,6 +17,8 @@ import orderRoutes from "./src/routes/orderRoutes.js";
 
 import analyticsRoutes from "./src/routes/analyticsRoutes.js"
 
+import walletRoutes from "./src/routes/walletRoutes.js"
+
 // Load env variables
 dotenv.config();
 
@@ -42,6 +44,8 @@ app.use("/api/wishlist", wishlistRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/orders", orderRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/wallet', walletRoutes);
+
 // Health check
 app.get("/", (req, res) => {
   res.send("E-commerce API is up and running 🚀");

@@ -44,3 +44,12 @@ export const isUser = (req, res, next) => {
   }
   next();
 };
+
+
+
+export const isAdmin = (req, res, next) => {
+  if (req.user.role !== 'admin') {
+    throw CustomError.forbidden('Admin access required');
+  }
+  next();
+};
