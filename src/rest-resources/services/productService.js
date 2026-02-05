@@ -182,7 +182,6 @@
 // }
 
 // export default new ProductService();
-
 import {
   Product,
   User,
@@ -195,9 +194,12 @@ import CustomError from "../../utils/customError.js";
 import sequelize from "../../config/sequelize.js";
 
 class ProductService {
+  // Create a new product with images (vendor-only operation)
+  // Uses database transaction to ensure product + images are created atomically
   async createProduct(productData, vendorId, imageFiles = []) {
     const { name, description, price, stock, category_id } = productData;
 
+    // Input validation - ensure required fields exist
     if (!name || !price) {
       throw CustomError.badRequest("Product name and price are required");
     }
@@ -206,70 +208,74 @@ class ProductService {
       throw CustomError.badRequest("Price must be greater than 0");
     }
 
-    // Validate vendor exists
+    // Validate vendor exists and has correct role
     const vendor = await User.findByPk(vendorId);
     if (!vendor || vendor.role !== "vendor") {
       throw CustomError.forbidden("Valid vendor required");
     }
 
-    // Validate category if provided
+    // Validate category exists and belongs to this vendor (if provided)
     let validatedCategoryId = null;
     if (category_id) {
       const category = await Category.findByPk(category_id);
       if (!category) {
         throw CustomError.badRequest(
-          `Category with id ${category_id} does not exist`,
+          `Category with id ${category_id} does not exist`
         );
       }
 
-      // Check vendor owns category
+      // Vendor can only use their own categories
       if (category.vendor_id !== vendorId) {
         throw CustomError.forbidden("You can only use your own categories");
       }
       validatedCategoryId = category_id;
     }
 
-    // Use transaction for atomicity
+    // Use transaction for atomicity - product + images succeed together or fail together
     const transaction = await sequelize.transaction();
     try {
-      // Create product (category_id is validated or null)
+      // Create product record
       const product = await Product.create(
         {
           name,
           description,
           price,
-          stock: stock || 0,
+          stock: stock || 0, // Default to 0 if not provided
           category_id: validatedCategoryId,
           vendor_id: vendorId,
         },
-        { transaction },
+        { transaction }
       );
 
-      // Add images if provided
+      // Bulk insert product images (first image is primary)
       if (imageFiles.length > 0) {
         const images = imageFiles.map((file, index) => ({
           product_id: product.id,
           image_url: `/uploads/products/${file.filename}`,
-          is_primary: index === 0,
+          is_primary: index === 0, // First image is primary
         }));
         await ProductImage.bulkCreate(images, { transaction });
       }
 
       await transaction.commit();
-      return product;
+      return product; // Return product without images (fetch separately if needed)
     } catch (error) {
-      await transaction.rollback();
+      await transaction.rollback(); // Rollback on any failure
       throw error;
     }
   }
 
+  // Retrieve all products with filtering, pagination, and related data
+  // Supports category, vendor, and search filters
   async getAllProducts(filters = {}) {
     const { category, vendor, search, limit = 20, offset = 0 } = filters;
 
+    // Build dynamic WHERE conditions
     const where = {};
     if (category) where.category_id = category;
     if (vendor) where.vendor_id = vendor;
     if (search) {
+      // Search in both name and description (case-insensitive)
       where[Op.or] = [
         { name: { [Op.iLike]: `%${search}%` } },
         { description: { [Op.iLike]: `%${search}%` } },
@@ -278,12 +284,13 @@ class ProductService {
 
     const products = await Product.findAll({
       where,
+      // Eager load related models (LEFT JOINs)
       include: [
         {
           model: User,
           as: "vendor",
-          attributes: ["id", "name"],
-          required: false,
+          attributes: ["id", "name"], // Only fetch specific fields
+          required: false, // LEFT JOIN (include even if no vendor)
         },
         {
           model: Category,
@@ -295,24 +302,26 @@ class ProductService {
           model: ProductImage,
           as: "images",
           attributes: ["id", "image_url", "is_primary"],
-          required: false,
+          required: false, // Products without images still returned
         },
       ],
-      limit: parseInt(limit),
+      limit: parseInt(limit), // Pagination
       offset: parseInt(offset),
-      order: [["created_at", "DESC"]],
+      order: [["created_at", "DESC"]], // Most recent first
     });
 
     return products;
   }
 
+  // Get single product by ID with complete details
+  // Includes vendor info, category, and all images
   async getProductById(productId) {
     const product = await Product.findByPk(productId, {
       include: [
         {
           model: User,
           as: "vendor",
-          attributes: ["id", "name", "email"],
+          attributes: ["id", "name", "email"], // More vendor details for product page
         },
         {
           model: Category,
@@ -321,7 +330,7 @@ class ProductService {
         },
         {
           model: ProductImage,
-          as: "images",
+          as: "images", // All images for this product
         },
       ],
     });
@@ -332,9 +341,11 @@ class ProductService {
     return product;
   }
 
+  // Get all products for a specific vendor (vendor dashboard)
+  // Only shows primary images for performance
   async getVendorProducts(vendorId) {
     return await Product.findAll({
-      where: { vendor_id: vendorId },
+      where: { vendor_id: vendorId }, // Vendor-specific products only
       include: [
         {
           model: Category,
@@ -342,33 +353,37 @@ class ProductService {
           attributes: ["id", "name"],
         },
         {
+          // Only primary images for vendor dashboard (performance)
           model: ProductImage,
           as: "images",
           where: { is_primary: true },
           required: false,
         },
       ],
-      order: [["created_at", "DESC"]],
+      order: [["created_at", "DESC"]], // Recent products first
     });
   }
 
+  // Update existing product (vendor-only operation)
+  // Only vendor who owns the product can update it
   async updateProduct(productId, vendorId, updates) {
+    // Check product exists AND vendor owns it (single query)
     const product = await Product.findOne({
       where: { id: productId, vendor_id: vendorId },
     });
 
     if (!product) {
       throw CustomError.notFound(
-        "Product not found or you do not have permission",
+        "Product not found or you do not have permission"
       );
     }
 
-    // Validate category update
+    // Validate category update if changing category
     if (updates.category_id) {
       const category = await Category.findByPk(updates.category_id);
       if (!category) {
         throw CustomError.badRequest(
-          `Category with id ${updates.category_id} does not exist`,
+          `Category with id ${updates.category_id} does not exist`
         );
       }
       if (category.vendor_id !== vendorId) {
@@ -376,24 +391,30 @@ class ProductService {
       }
     }
 
+    // Update product (only changed fields)
     await product.update(updates);
-    return product;
+    return product; // Returns updated product instance
   }
 
+  // Delete product (vendor-only operation)
+  // Only vendor who owns the product can delete it
   async deleteProduct(productId, vendorId) {
+    // Atomic check + delete
     const product = await Product.findOne({
       where: { id: productId, vendor_id: vendorId },
     });
 
     if (!product) {
       throw CustomError.notFound(
-        "Product not found or you do not have permission",
+        "Product not found or you do not have permission"
       );
     }
 
-    await product.destroy();
+    await product.destroy(); // Deletes product + cascades to images (if configured)
     return { message: "Product deleted successfully" };
   }
+
+  
 }
 
 export default new ProductService();

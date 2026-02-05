@@ -1,0 +1,149 @@
+<!doctype html>
+<html>
+  <head>
+    <title>WebSocket Test</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+      body {
+        font-family: Arial;
+        padding: 20px;
+        max-width: 800px;
+        margin: 0 auto;
+      }
+      input,
+      button {
+        padding: 10px;
+        margin: 5px;
+      }
+      #token {
+        width: 500px;
+      }
+      #status {
+        padding: 10px;
+        margin: 10px 0;
+        border-radius: 5px;
+        font-weight: bold;
+      }
+      .connected {
+        background: #4caf50;
+        color: white;
+      }
+      .disconnected {
+        background: #f44336;
+        color: white;
+      }
+      #messages {
+        border: 1px solid #ddd;
+        padding: 10px;
+        height: 400px;
+        overflow-y: auto;
+        background: #f9f9f9;
+        margin-top: 10px;
+      }
+      .msg {
+        padding: 8px;
+        margin: 5px 0;
+        background: white;
+        border-left: 3px solid #2196f3;
+        border-radius: 3px;
+      }
+      .time {
+        color: #666;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1> WebSocket Test</h1>
+
+    <div>
+      <input type="text" id="token" placeholder="Paste your JWT token here" />
+      <br />
+      <button onclick="connect()">Connect</button>
+      <button onclick="disconnect()">Disconnect</button>
+    </div>
+
+    <div id="status" class="disconnected">Not Connected</div>
+
+    <h3>Messages:</h3>
+    <div id="messages"></div>
+
+    <script>
+      let socket = null;
+
+      function connect() {
+        const token = document.getElementById("token").value.trim();
+
+        if (!token) {
+          alert("Please enter JWT token");
+          return;
+        }
+
+        // Connect to server
+        socket = io("http://localhost:5000", {
+          auth: { token },
+        });
+
+        // Connection events
+        socket.on("connect", () => {
+          document.getElementById("status").className = "connected";
+          document.getElementById("status").textContent = " Connected";
+          addMessage("Connected to server", "green");
+        });
+
+        socket.on("connected", (data) => {
+          addMessage("Server: " + data.message, "blue");
+        });
+
+        socket.on("disconnect", () => {
+          document.getElementById("status").className = "disconnected";
+          document.getElementById("status").textContent = " Disconnected";
+          addMessage("Disconnected", "red");
+        });
+
+        // Listen for events
+        socket.on("order_placed", (data) => {
+          addMessage(" " + data.message, "green");
+        });
+
+        socket.on("order_updated", (data) => {
+          addMessage(" " + data.message, "blue");
+        });
+
+        socket.on("wallet_updated", (data) => {
+          addMessage("" + data.message, "green");
+        });
+
+        socket.on("gift_card_redeemed", (data) => {
+          addMessage("" + data.message, "green");
+        });
+
+        socket.on("new_order", (data) => {
+          addMessage(" Admin: New order #" + data.orderId, "purple");
+        });
+
+        socket.on("error", (err) => {
+          addMessage("Error: " + err.message, "red");
+        });
+      }
+
+      function disconnect() {
+        if (socket) {
+          socket.disconnect();
+          socket = null;
+        }
+      }
+
+      function addMessage(text, color = "black") {
+        const time = new Date().toLocaleTimeString();
+        const div = document.createElement("div");
+        div.className = "msg";
+        div.innerHTML = `<span class="time">${time}</span> <span style="color: ${color}">${text}</span>`;
+
+        const messages = document.getElementById("messages");
+        messages.appendChild(div);
+        messages.scrollTop = messages.scrollHeight;
+      }
+    </script>
+  </body>
+</html>

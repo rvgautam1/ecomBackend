@@ -8,10 +8,14 @@ import {
 } from "../../db/models/index.js";
 import CustomError from "../../utils/customError.js";
 import { Transaction } from "sequelize";
+import { sendToUser } from "../../socket/socketServer.js";
 
 class WalletService {
-  // create wallet for user
-
+  // Create a new wallet for a user
+  // If wallet already exists, return the existing one
+  // Parameters:
+  // - userId: ID of the user for whom to create wallet
+  // Returns: Wallet object with initial zero balance
   async createWallet(userId) {
     const existingWallet = await Wallet.findOne({ where: { user_id: userId } });
 
@@ -23,13 +27,17 @@ class WalletService {
       user_id: userId,
       balance: 0.0,
       currency: "INR",
-      version: 0,
+      version: 0, // Used for optimistic locking to prevent race conditions
     });
 
     return wallet;
   }
 
-  // get wallet balance
+  // Get current wallet balance and details for a user
+  // Automatically creates wallet if it doesn't exist
+  // Parameters:
+  // - userId: ID of the user
+  // Returns: Object with wallet details including available balance
   async getWalletBalance(userId) {
     let wallet = await Wallet.findOne({
       where: { user_id: userId },
@@ -42,6 +50,7 @@ class WalletService {
       ],
     });
 
+    // Auto-create wallet if it doesn't exist
     if (!wallet) {
       wallet = await this.createWallet(userId);
     }
@@ -51,6 +60,7 @@ class WalletService {
       user_id: wallet.user_id,
       balance: parseFloat(wallet.balance),
       locked_balance: parseFloat(wallet.locked_balance),
+      // Available balance is total minus locked amount
       available_balance:
         parseFloat(wallet.balance) - parseFloat(wallet.locked_balance),
       currency: wallet.currency,
@@ -59,8 +69,16 @@ class WalletService {
     };
   }
 
-  //atomic credit with the version control
-
+  // Add money to wallet with atomic transaction and version control
+  // Uses optimistic locking with retry mechanism to handle concurrent updates
+  // Parameters:
+  // - userId: ID of the user
+  // - amount: Amount to credit
+  // - source: Source of credit (e.g., 'gift_card', 'refund', 'cashback')
+  // - description: Human-readable description
+  // - metadata: Additional data (reference_type, reference_id, etc.)
+  // - maxRetries: Maximum retry attempts on version conflicts (default: 3)
+  // Returns: Transaction details with updated balance
   async creaditWallet(
     userId,
     amount,
@@ -70,19 +88,22 @@ class WalletService {
     maxRetries = 3,
   ) {
     let attempt = 0;
+
     while (attempt < maxRetries) {
+      // Start transaction with SERIALIZABLE isolation to prevent phantom reads
       const transaction = await sequelize.transaction({
         isolationLevel: Transaction.ISOLATION_LEVELS.SERIALIZABLE,
       });
 
       try {
-        // read current wallet state 
+        // Lock the wallet row to prevent concurrent modifications
         let wallet = await Wallet.findOne({
           where: { user_id: userId },
-          lock: transaction.LOCK.UPDATE, // lock the transaction for perticular process 
+          lock: transaction.LOCK.UPDATE, // Pessimistic lock for this transaction
           transaction,
         });
 
+        // Create wallet if it doesn't exist
         if (!wallet) {
           wallet = await this.createWallet(userId);
           wallet = await Wallet.findOne({
@@ -92,32 +113,34 @@ class WalletService {
           });
         }
 
+        // Validate wallet is active
         if (!wallet.is_active) {
           throw CustomError.badRequest("Wallet is inactive");
         }
 
-          // version check + calculate new balance
+        // Store current version for optimistic lock check
         const currentVersion = wallet.version;
         const balanceBefore = parseFloat(wallet.balance);
         const creditAmount = parseFloat(amount);
         const balanceAfter = balanceBefore + creditAmount;
 
-        // update with version check
+        // Update balance with version check (optimistic locking)
+        // This ensures no other transaction modified the wallet between read and write
         const [updatedRows] = await Wallet.update(
           {
             balance: balanceAfter,
-            version: currentVersion + 1,
+            version: currentVersion + 1, // Increment version on each update
           },
           {
             where: {
               id: wallet.id,
-              version: currentVersion, // version should be match
+              version: currentVersion, // Only update if version matches
             },
             transaction,
           },
         );
 
-        // if version not match then retrying
+        // If version mismatch (another transaction updated first), retry
         if (updatedRows === 0) {
           await transaction.rollback();
           attempt++;
@@ -125,11 +148,13 @@ class WalletService {
             `Version conflict on credit attempt ${attempt}. Retrying...`,
           );
 
+          // Exponential backoff before retry
           await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
           continue;
         }
 
-        // Create transaction record(ledger-> never delete or update the transaction)
+        // Create immutable transaction record (audit trail)
+        // This ledger entry should never be deleted or modified
         const walletTxn = await WalletTransaction.create(
           {
             wallet_id: wallet.id,
@@ -147,7 +172,15 @@ class WalletService {
           { transaction },
         );
 
+        // Commit all changes atomically
         await transaction.commit();
+        sendToUser(userId, "wallet_updated", {
+          type: "credit",
+          amount,
+          balance: balanceAfter,
+          message: `${amount} added to wallet`,
+        });
+
         return {
           transaction_id: walletTxn.id,
           wallet_id: wallet.id,
@@ -161,6 +194,8 @@ class WalletService {
         };
       } catch (error) {
         await transaction.rollback();
+
+        // If max retries reached, throw error
         if (attempt >= maxRetries - 1) {
           throw error;
         }
@@ -172,8 +207,17 @@ class WalletService {
       "Failed to credit wallet after multiple retries",
     );
   }
-  // Atomic Debit with version control
 
+  // Deduct money from wallet with atomic transaction and version control
+  // Validates sufficient available balance before deduction
+  // Parameters:
+  // - userId: ID of the user
+  // - amount: Amount to debit
+  // - source: Source of debit (e.g., 'order_payment', 'withdrawal')
+  // - description: Human-readable description
+  // - metadata: Additional data (reference_type, reference_id, etc.)
+  // - maxRetries: Maximum retry attempts on version conflicts (default: 3)
+  // Returns: Transaction details with updated balance
   async debitWallet(
     userId,
     amount,
@@ -183,12 +227,15 @@ class WalletService {
     maxRetries = 3,
   ) {
     let attempt = 0;
+
     while (attempt < maxRetries) {
+      // Start transaction with SERIALIZABLE isolation
       const transaction = await sequelize.transaction({
         isolationLevel: Transaction.ISOLATION_LEVELS.SERIALIZABLE,
       });
 
       try {
+        // Lock the wallet row for update
         const wallet = await Wallet.findOne({
           where: { user_id: userId },
           lock: transaction.LOCK.UPDATE,
@@ -206,9 +253,12 @@ class WalletService {
         const currentVersion = wallet.version;
         const balanceBefore = parseFloat(wallet.balance);
         const debitAmount = parseFloat(amount);
+
+        // Calculate available balance (total minus locked)
         const availableBalance =
           balanceBefore - parseFloat(wallet.locked_balance);
 
+        // Validate sufficient balance
         if (availableBalance < debitAmount) {
           throw CustomError.badRequest(
             `Insufficient balance. Available: ${availableBalance}`,
@@ -217,7 +267,7 @@ class WalletService {
 
         const balanceAfter = balanceBefore - debitAmount;
 
-        // update with version check(optimistic locking )
+        // Update balance with version check (optimistic locking)
         const [updatedRows] = await Wallet.update(
           {
             balance: balanceAfter,
@@ -226,25 +276,26 @@ class WalletService {
           {
             where: {
               id: wallet.id,
-              version: currentVersion, // version must be match
+              version: currentVersion, // Version must match
             },
             transaction,
           },
         );
 
-        // if version mismatched , retry
+        // If version mismatch, retry
         if (updatedRows === 0) {
           await transaction.rollback();
           attempt++;
           console.log(
-            `Version conflict on debit attempt ${attempt}. Retrying....`,
+            `Version conflict on debit attempt ${attempt}. Retrying...`,
           );
 
+          // Exponential backoff before retry
           await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
           continue;
         }
 
-        // Create immutable(never change ) transaction record
+        // Create immutable transaction record (audit trail)
         const walletTxn = await WalletTransaction.create(
           {
             wallet_id: wallet.id,
@@ -264,6 +315,14 @@ class WalletService {
 
         await transaction.commit();
 
+        // websocekt notification
+        sendToUser(userId, "wallet_updated", {
+          type: "debit",
+          amount,
+          balance: balanceAfter,
+          message: `${amount} deducted from wallet`,
+        });
+
         return {
           transaction_id: walletTxn.id,
           wallet_id: wallet.id,
@@ -277,6 +336,7 @@ class WalletService {
         };
       } catch (error) {
         await transaction.rollback();
+
         if (attempt >= maxRetries - 1) {
           throw error;
         }
@@ -289,24 +349,32 @@ class WalletService {
     );
   }
 
-  // get transaction history
+  // Retrieve paginated transaction history for a user's wallet
+  // Supports filtering by transaction type and source
+  // Parameters:
+  // - userId: ID of the user
+  // - filter: Object containing page, limit, type, and source filters
+  // Returns: Paginated list of transactions with metadata
   async getTransactionHistory(userId, filter = {}) {
     const wallet = await Wallet.findOne({ where: { user_id: userId } });
+
+    // Return empty result if wallet doesn't exist
     if (!wallet) {
-      return { total: 0, transaction: [] };
+      return { total: 0, transactions: [] };
     }
 
     const { page = 1, limit = 20, type, source } = filter;
     const offset = (page - 1) * limit;
 
+    // Build dynamic where clause based on filters
     const where = { wallet_id: wallet.id };
-    if (type) where.transaction_type = type;
-    if (source) where.transaction_source = source;
+    if (type) where.transaction_type = type; // Filter by credit or debit
+    if (source) where.transaction_source = source; // Filter by source
 
     const { count, rows: transaction } =
       await WalletTransaction.findAndCountAll({
         where,
-        Order: [["created_at", "DESC"]],
+        order: [["created_at", "DESC"]], // Most recent first
         limit: parseInt(limit),
         offset: parseInt(offset),
       });
@@ -315,7 +383,7 @@ class WalletService {
       total: count,
       page: parseInt(page),
       limit: parseInt(limit),
-      total_pages: Math.ceil(count / limit), // give total page and ceil -> rounds up to nearest whole number
+      total_pages: Math.ceil(count / limit), // Round up to get total pages
       transactions: transaction.map((txn) => ({
         id: txn.id,
         type: txn.transaction_type,
@@ -330,73 +398,18 @@ class WalletService {
     };
   }
 
-  // lock balance with version control
-
+  // Lock a portion of wallet balance temporarily
+  // Used when order is placed but payment not yet confirmed
+  // Locked balance cannot be used for other transactions
+  // Parameters:
+  // - userId: ID of the user
+  // - amount: Amount to lock
+  // - metadata: Additional context data
+  // - maxRetries: Maximum retry attempts (default: 3)
+  // Returns: True if successful
   async lockBalance(userId, amount, metadata = {}, maxRetries = 3) {
     let attempt = 0;
-    while (attempt < maxRetries) {
-      const transaction = await sequelize.transaction();
 
-      try {
-        const wallet = await Wallet.findOne({
-          where: { user_id: userId },
-          lock: transaction.LOCK.UPDATE,
-          transaction,
-        });
-        if (!wallet) {
-          throw CustomError.notFound("Wallet not found ");
-        }
-
-        const currentVersion = wallet.version;
-        const availableBalance =
-          parseFloat(wallet.balance) - parseFloat(wallet.locked_balance);
-        if (availableBalance < parseFloat(amount)) {
-          throw CustomError.badRequest("Insufficient available balance");
-        }
-
-        const [updatedRows] = await Wallet.update(
-          {
-            locked_balance:
-              parseFloat(wallet.locked_balance) + parseFloat(amount),
-            version: currentVersion + 1,
-          },
-          {
-            where: {
-              id: wallet.id,
-              version: currentVersion,
-            },
-            transaction,
-          },
-        );
-
-        if (updatedRows === 0) {
-          await transaction.rollback();
-          attempt++;
-          await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
-          continue;
-        }
-
-        await transaction.commit();
-        return true;
-      } catch (error) {
-        await transaction.rollback();
-        if (attempt >= maxRetries - 1) {
-          throw error;
-        }
-
-        attempt++;
-      }
-    }
-
-    throw CustomError.serverError(
-      "Failed to lock balance after multiple retries",
-    );
-  }
-
-  // unlock with the version control
-
-  async unlockBalance(userId, amount, maxRetries = 3) {
-    let attempt = 0;
     while (attempt < maxRetries) {
       const transaction = await sequelize.transaction();
 
@@ -412,6 +425,86 @@ class WalletService {
         }
 
         const currentVersion = wallet.version;
+
+        // Calculate available balance (not locked)
+        const availableBalance =
+          parseFloat(wallet.balance) - parseFloat(wallet.locked_balance);
+
+        // Validate sufficient available balance
+        if (availableBalance < parseFloat(amount)) {
+          throw CustomError.badRequest("Insufficient available balance");
+        }
+
+        // Increment locked balance with version check
+        const [updatedRows] = await Wallet.update(
+          {
+            locked_balance:
+              parseFloat(wallet.locked_balance) + parseFloat(amount),
+            version: currentVersion + 1,
+          },
+          {
+            where: {
+              id: wallet.id,
+              version: currentVersion,
+            },
+            transaction,
+          },
+        );
+
+        // Retry on version conflict
+        if (updatedRows === 0) {
+          await transaction.rollback();
+          attempt++;
+          await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+          continue;
+        }
+
+        await transaction.commit();
+        return true;
+      } catch (error) {
+        await transaction.rollback();
+
+        if (attempt >= maxRetries - 1) {
+          throw error;
+        }
+
+        attempt++;
+      }
+    }
+
+    throw CustomError.serverError(
+      "Failed to lock balance after multiple retries",
+    );
+  }
+
+  // Release locked balance back to available balance
+  // Called when order is cancelled or payment is confirmed
+  // Parameters:
+  // - userId: ID of the user
+  // - amount: Amount to unlock
+  // - maxRetries: Maximum retry attempts (default: 3)
+  // Returns: True if successful
+  async unlockBalance(userId, amount, maxRetries = 3) {
+    let attempt = 0;
+
+    while (attempt < maxRetries) {
+      const transaction = await sequelize.transaction();
+
+      try {
+        const wallet = await Wallet.findOne({
+          where: { user_id: userId },
+          lock: transaction.LOCK.UPDATE,
+          transaction,
+        });
+
+        if (!wallet) {
+          throw CustomError.notFound("Wallet not found");
+        }
+
+        const currentVersion = wallet.version;
+
+        // Decrease locked balance with version check
+        // Math.max ensures locked balance never goes below zero
         const [updatedRows] = await Wallet.update(
           {
             locked_balance: Math.max(
@@ -429,6 +522,7 @@ class WalletService {
           },
         );
 
+        // Retry on version conflict
         if (updatedRows === 0) {
           await transaction.rollback();
           attempt++;
@@ -440,6 +534,7 @@ class WalletService {
         return true;
       } catch (error) {
         await transaction.rollback();
+
         if (attempt >= maxRetries - 1) {
           throw error;
         }
@@ -448,12 +543,18 @@ class WalletService {
     }
 
     throw CustomError.serverError(
-      "Failed to unlock balance after the multiple retries!",
+      "Failed to unlock balance after multiple retries",
     );
   }
 
-  // refund to wallet
-
+  // Process refund by crediting amount back to wallet
+  // Wrapper around creaditWallet specifically for refunds
+  // Parameters:
+  // - userId: ID of the user
+  // - orderId: ID of the order being refunded
+  // - amount: Refund amount
+  // - description: Optional custom description
+  // Returns: Transaction details
   async refundToWallet(userId, orderId, amount, description) {
     return await this.creaditWallet(
       userId,
@@ -467,8 +568,14 @@ class WalletService {
     );
   }
 
-  // Add Cashback
-
+  // Add cashback rewards to wallet
+  // Wrapper around creaditWallet specifically for cashback
+  // Parameters:
+  // - userId: ID of the user
+  // - orderId: ID of the order earning cashback
+  // - amount: Cashback amount
+  // - description: Optional custom description
+  // Returns: Transaction details
   async addCashBack(userId, orderId, amount, description) {
     return await this.creaditWallet(
       userId,
@@ -482,12 +589,18 @@ class WalletService {
     );
   }
 
-  // Process order payment from wallet
+  // Process order payment by debiting from wallet
+  // Wrapper around debitWallet specifically for order payments
+  // Parameters:
+  // - userId: ID of the user
+  // - orderId: ID of the order being paid
+  // - amount: Payment amount
+  // Returns: Transaction details
   async processOrderPayment(userId, orderId, amount) {
     return await this.debitWallet(
       userId,
       amount,
-      "Order_payment",
+      "order_payment",
       `Payment for order #${orderId}`,
       {
         reference_type: "orders",

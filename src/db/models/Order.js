@@ -65,6 +65,7 @@ const Order = sequelize.define(
       type: DataTypes.STRING(20),
       allowNull: false,
     },
+    
   },
   {
     tableName: "orders",

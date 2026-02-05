@@ -12,6 +12,8 @@ export const createOrder = async (req, res, next) => {
       payment_method: payment_method || "cod"
     });
 
+    console.log(order);
+
     res.status(201).json({
       success: true,
       message: "Order placed successfully",
