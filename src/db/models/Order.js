@@ -1,10 +1,6 @@
 import { DataTypes } from "sequelize";
 import sequelize from "../../config/sequelize.js";
 
-// Order model storing user orders, payment details, shipping snapshots,
-
-// and lifecycle status with snake_case timestamps mapping
-
 const Order = sequelize.define(
   "Order",
   {
@@ -33,6 +29,7 @@ const Order = sequelize.define(
       type: DataTypes.ENUM(
         "pending",
         "confirmed",
+        "processing",
         "shipped",
         "delivered",
         "cancelled",
@@ -65,7 +62,36 @@ const Order = sequelize.define(
       type: DataTypes.STRING(20),
       allowNull: false,
     },
-    
+
+   // for order tracking 
+    tracking_number: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+    shipping_carrier: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+    shipped_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    delivered_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    cancelled_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    confirmed_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    processing_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
   },
   {
     tableName: "orders",

@@ -1,9 +1,4 @@
-import {
-  Order,
-  OrderItem,
-  Product,
-  sequelize,
-} from "../../db/models/index.js";
+import { Order, OrderItem, Product, sequelize } from "../../db/models/index.js";
 import { Op } from "sequelize";
 
 class AnalyticsService {
@@ -275,6 +270,99 @@ class AnalyticsService {
       revenue: parseFloat(stat.revenue),
     }));
   }
+
+
+
+
+
+
+  // Confirm order (for admin - move from pending to confirmed)
+  async confirmOrder(orderId) {
+    const order = await Order.findByPk(orderId);
+
+    if (!order) {
+      throw CustomError.notFound("Order not found");
+    }
+
+    // Only pending orders can be confirmed
+    if (order.status !== "pending") {
+      throw CustomError.badRequest("Only pending orders can be confirmed");
+    }
+
+    // Payment should be completed for non-COD orders before confirming
+    if (order.payment_method !== "cod" && order.payment_status !== "completed") {
+      throw CustomError.badRequest("Payment must be completed before confirming order");
+    }
+
+    await order.update({
+      status: "confirmed",
+    });
+
+    return order;
+  }
+
+  // Ship order
+  async shipOrder(orderId, shippingData) {
+    const order = await Order.findByPk(orderId);
+    
+    if (!order) {
+      throw CustomError.notFound('Order not found');
+    }
+    
+    // Check if order is in a state that can be shipped
+    if (order.status !== 'confirmed') {
+      throw CustomError.badRequest(
+        'Only confirmed orders can be shipped'
+      );
+    }
+    
+    // Update order with shipping information
+    await order.update({
+      status: 'shipped',
+      ...shippingData
+    });
+    
+    return order;
+  }
+
+  // Deliver order
+  async deliverOrder(orderId) {
+    const order = await Order.findByPk(orderId);
+    
+    if (!order) {
+      throw CustomError.notFound('Order not found');
+    }
+    
+    if (order.status !== 'shipped') {
+      throw CustomError.badRequest('Only shipped orders can be delivered');
+    }
+    
+    await order.update({
+      status: 'delivered',
+    });
+    
+    // Optional: Add cashback/rewards for wallet payments
+    if (order.payment_method === 'wallet') {
+      const cashback = parseFloat(order.total_amount) * 0.05; // 5% cashback
+      await walletService.addCashBack(
+        order.user_id,
+        order.id,
+        cashback,
+        '5% cashback on order delivery'
+      );
+    }
+    
+    return order;
+  }
+
+
+
+
+
+
+
+
+
 }
 
 export default new AnalyticsService();

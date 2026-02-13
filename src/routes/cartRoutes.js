@@ -4,7 +4,7 @@ import {
   removeFromCart,
   getCart,
   updateCartItem,
-  clearCart
+  clearCart,
 } from "../rest-resources/controllers/cartControllers.js";
 import { authenticateUser } from "../middleware/auth.js";
 

@@ -1,23 +1,68 @@
-import express, { Router } from 'express'
+import express, { Router } from "express";
 import {
-   createOrder,
+  createOrder,
   getUserOrders,
   getOrderById,
   cancelOrder,
-  updatePaymentStatus
-} from '../rest-resources/controllers/orderController.js'
-import { authenticateUser } from "../middleware/auth.js";
+  updatePaymentStatus,
+  // Vendor routes
+  getVendorOrders,
+  confirmOrder,
+  processOrder,
+  shipOrder,
+  deliverOrder,
+  vendorCancelOrder,
+  updateOrderStatus,
+  
+} from "../rest-resources/controllers/orderController.js";
+import {
+  authenticateUser,
+  isVendor,
+  isAdmin,
+  isUser,
+} from "../middleware/auth.js";
 
 const router = express.Router();
 
-router.use(authenticateUser);
+// user 
+router.post("/", authenticateUser, isUser, createOrder);
+router.get("/", authenticateUser, isUser, getUserOrders);
+router.get("/:orderId", authenticateUser, isUser, getOrderById);
+router.put("/:orderId/cancel", authenticateUser, isUser, cancelOrder);
+router.put("/:orderId/payment", authenticateUser, isUser, updatePaymentStatus);
 
-router.post('/' , createOrder);
+// vendor routes 
+router.get("/vendor/orders", authenticateUser, isVendor, getVendorOrders);
+router.put(
+  "/vendor/:orderId/confirm",
+  authenticateUser,
+  isVendor,
+  confirmOrder,
+);
+router.put(
+  "/vendor/:orderId/process",
+  authenticateUser,
+  isVendor,
+  processOrder,
+);
+router.put("/vendor/:orderId/ship", authenticateUser, isVendor, shipOrder);
+router.put(
+  "/vendor/:orderId/deliver",
+  authenticateUser,
+  isVendor,
+  deliverOrder,
+);
+router.put(
+  "/vendor/:orderId/cancel",
+  authenticateUser,
+  isVendor,
+  vendorCancelOrder,
+);
+router.put(
+  "/vendor/:orderId/status",
+  authenticateUser,
+  isVendor,
+  updateOrderStatus,
+);
 
-router.get('/' , getUserOrders);
-router.get("/:orderId" , getOrderById)
-router.put("/:orderId/cancel", cancelOrder)
-
-router.put('/:orderId/payment' , updatePaymentStatus)
-
-export default router ;
+export default router;

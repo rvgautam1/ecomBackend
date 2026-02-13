@@ -1,10 +1,9 @@
-import { where } from "sequelize";
+
 import {
   Wallet,
   WalletTransaction,
   User,
-  sequelize,
-  Order,
+  sequelize
 } from "../../db/models/index.js";
 import CustomError from "../../utils/customError.js";
 import { Transaction } from "sequelize";
@@ -174,6 +173,7 @@ class WalletService {
 
         // Commit all changes atomically
         await transaction.commit();
+        
         sendToUser(userId, "wallet_updated", {
           type: "credit",
           amount,

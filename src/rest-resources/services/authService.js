@@ -90,6 +90,9 @@ class AuthService {
       { expiresIn: process.env.JWT_EXPIRE },
     );
 
+
+    
+
     return {
       user: {
         id: user.id,

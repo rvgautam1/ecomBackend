@@ -63,8 +63,8 @@ class GiftCardService {
     }
 
     // Insert all gift cards in one database operation for efficiency
-    const created = await GiftCard.bulkCreate(giftCards);
-    return created;
+    
+    return await GiftCard.bulkCreate(giftCards);;
   }
 
   // Redeem a gift card and credit the balance to user's wallet
@@ -112,7 +112,7 @@ class GiftCardService {
 
       // Credit the gift card amount to user's wallet
       // This creates a wallet transaction record
-      await walletService.creditWallet(
+      await walletService.creaditWallet(
         userId,
         redeemAmount,
         "gift_card",
