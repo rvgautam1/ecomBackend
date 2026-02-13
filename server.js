@@ -42,8 +42,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const httpServer = http.createServer(app);
 
-//foundation middleware
-
+// Foundation middleware
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "*",
@@ -56,22 +55,36 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use(cookieParser());
 
-//authentication
-
+// Authentication middleware (sets req.user if authenticated)
 app.use(authenticateOptional);
 
-// session guest only
-
+/**
+ *  Guest Session Middleware
+ * This creates a session for guest users and attaches it to req
+ * Must come after authenticateOptional but before routes
+ */
 app.use(async (req, res, next) => {
-  if (!req.user) {
-    req.sessionId = await sessionService.getOrCreateSessionId(req, res);
+  try {
+    // If user is not authenticated, create/get guest session
+    if (!req.user) {
+      req.sessionId = await sessionService.getOrCreateSessionId(req, res);
+      req.isGuest = true;
+    } else {
+      // For authenticated users, we still might have a session from before login
+      // This will be used for cart merging
+      req.sessionId = req.cookies?.sessionId || req.headers["x-session-id"];
+      req.isGuest = false;
+    }
+    next();
+  } catch (error) {
+    console.error("Session middleware error:", error);
+    // Continue even if session creation fails
     req.isGuest = true;
-  } else {
-    req.isGuest = false;
+    next();
   }
-  next();
 });
 
+// Routes with caching configuration
 app.use(
   "/api/categories",
   cacheMiddleware({
@@ -83,7 +96,6 @@ app.use(
   categoryRoutes,
 );
 
-/* Vendor listing */
 app.use(
   "/api/vendor",
   cacheMiddleware({
@@ -95,19 +107,9 @@ app.use(
   vendorRoutes,
 );
 
-/* Cart - user/session aware */
-app.use(
-  "/api/cart",
-  cacheMiddleware({
-    ttl: 300,
-    keyPrefix: "cart",
-    includeUser: true,
-    includeSession: true,
-  }),
-  cartRoutes,
-);
+// Cart routes - NO CACHING for cart operations (real-time data)
+app.use("/api/cart", cartRoutes);
 
-/* Wishlist */
 app.use(
   "/api/wishlist",
   cacheMiddleware({
@@ -119,7 +121,6 @@ app.use(
   wishlistRoutes,
 );
 
-/* Orders */
 app.use(
   "/api/orders",
   cacheMiddleware({
@@ -131,7 +132,6 @@ app.use(
   orderRoutes,
 );
 
-/* Reviews */
 app.use(
   "/api/reviews",
   cacheMiddleware({
@@ -143,7 +143,6 @@ app.use(
   reviewRoutes,
 );
 
-/* Analytics - very short cache */
 app.use(
   "/api/analytics",
   cacheMiddleware({
@@ -155,7 +154,6 @@ app.use(
   analyticsRoutes,
 );
 
-/* Wallet - short private cache */
 app.use(
   "/api/wallet",
   cacheMiddleware({
@@ -167,7 +165,6 @@ app.use(
   walletRoutes,
 );
 
-/* Gift Cards */
 app.use(
   "/api/gift-cards",
   cacheMiddleware({
@@ -179,10 +176,10 @@ app.use(
   giftCardRoutes,
 );
 
-/* Auth routes - no caching */
+// Auth routes - no caching
 app.use("/api/auth", authRoutes);
 
-
+// Session debug endpoint
 app.get("/api/session", async (req, res) => {
   const sessionId = req.sessionId || req.cookies?.sessionId;
 
@@ -191,6 +188,7 @@ app.get("/api/session", async (req, res) => {
       isGuest: false,
       userId: req.user.id,
       role: req.user.role,
+      sessionId: sessionId || null,
     });
   }
 
@@ -202,15 +200,15 @@ app.get("/api/session", async (req, res) => {
     isGuest: true,
     sessionId,
     sessionInfo,
+    cartExists: sessionId
+      ? (await sessionService.getData(sessionId, "cart", "items")) !== null
+      : false,
   });
 });
 
-
-
 initSocket(httpServer);
 
-
-
+// Redis connection
 const connectRedis = async () => {
   try {
     if (!redisClient.isOpen) {
@@ -221,7 +219,7 @@ const connectRedis = async () => {
     const sessionCount = await sessionService.getActiveSessionCount();
     console.log(`Active sessions: ${sessionCount}`);
   } catch (err) {
-    console.error("Redis connection failed:", err.message);
+    console.error(" Redis connection failed:", err.message);
     if (process.env.RUNNING_IN_DOCKER === "true") {
       setTimeout(connectRedis, 5000);
     }
@@ -229,6 +227,7 @@ const connectRedis = async () => {
 };
 connectRedis();
 
+// Database connection
 const testDatabaseConnection = async () => {
   try {
     await sequelize.authenticate();
@@ -238,7 +237,7 @@ const testDatabaseConnection = async () => {
   }
 };
 
-
+// Health check endpoint
 app.get("/health", async (req, res) => {
   try {
     await sequelize.authenticate();
@@ -249,6 +248,7 @@ app.get("/health", async (req, res) => {
       database: "connected",
       redis: redisClient.isOpen ? "connected" : "disconnected",
       caching: "enabled",
+      guestSessions: "enabled",
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -259,12 +259,10 @@ app.get("/health", async (req, res) => {
   }
 });
 
-
-
+// Error handler - MUST be last
 app.use(errorHandler);
 
-
-
+// Start server
 const startServer = async () => {
   try {
     await testDatabaseConnection();
@@ -273,9 +271,10 @@ const startServer = async () => {
       console.log(`Server running on port ${PORT}`);
       console.log(`Health: http://localhost:${PORT}/health`);
       console.log(`Session debug: http://localhost:${PORT}/api/session`);
+      console.log(`  Guest cart: Enabled`);
     });
   } catch (error) {
-    console.error("Startup failed:", error);
+    console.error("❌ Startup failed:", error);
     process.exit(1);
   }
 };

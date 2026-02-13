@@ -17,15 +17,17 @@ const router = express.Router();
 // authenticate the user
 router.use(authenticateUser);
 
-// user routes 
-router.get('/balance', getBalance);
-router.get('/transactions', validate(transactionHistorySchema),getTransactions);
+// user routes
+router.get("/balance", getBalance);
+router.get(
+  "/transactions",
+  validate(transactionHistorySchema),
+  getTransactions,
+);
 
-// admin routes 
+// admin routes
 
-router.post('/:userId/credit' , isAdmin , validate(addMoneySchema), addMoney);
-router.post('/:userId/debit', isAdmin , validate(addMoneySchema), deductMoney)
-
-
+router.post("/:userId/credit", isAdmin, validate(addMoneySchema), addMoney);
+router.post("/:userId/debit", isAdmin, validate(addMoneySchema), deductMoney);
 
 export default router;

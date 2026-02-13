@@ -2,6 +2,7 @@ import { Cart, Product, ProductImage } from "../../db/models/index.js";
 import CustomError from "../../utils/customError.js";
 import sessionService from "../../utils/sessionService.js";
 import invalidationService from "../../cache/invalidationService.js";
+import redisClient from "../../config/redis.js";
 class CartService {
   // Add product to user's cart or increment quantity if already exists
   // Automatically validates stock availability before adding
@@ -163,7 +164,8 @@ class CartService {
           let productdata = await sessionService.getData(
             sessionId,
             "cart",
-            `product_${product_id}`,
+            `product_${Product}`
+            ,
           );
 
           // if not caches , fetch data from db
@@ -205,83 +207,216 @@ class CartService {
         }),
       );
 
-       const totalAmount = enhancedItems.reduce((sum, item) => {
+      const totalAmount = enhancedItems.reduce((sum, item) => {
         if (!item.product) return sum;
         return sum + Number(item.product.price) * item.quantity;
       }, 0);
 
-      return{
-         items: enhancedItems,
+      return {
+        items: enhancedItems,
         totalAmount: totalAmount.toFixed(2),
         itemCount: enhancedItems.length,
-        isGuest: true
-      }
+        isGuest: true,
+      };
     }
 
-    //no user or session - empty cart 
-     return {
+    //no user or session - empty cart
+    return {
       items: [],
-      totalAmount: '0.00',
+      totalAmount: "0.00",
       itemCount: 0,
-      isGuest: true
+      isGuest: true,
     };
   }
 
-
-  
   // Update quantity of specific cart item
   // Validates stock availability before updating
-  async updateCartItem(cartId, userId, quantity) {
+  async updateCartItem(cartId, userId, quantity, sessionId = null) {
     // Prevent invalid quantities
     if (quantity < 1) {
       throw CustomError.badRequest("Quantity must be at least 1");
     }
 
-    // Fetch cart item with product details and verify ownership
-    const cartItem = await Cart.findOne({
-      where: { id: cartId, user_id: userId },
-      include: [Product], // Need product stock info
-    });
+    if (userId) {
+      // Fetch cart item with product details and verify ownership
+      const cartItem = await Cart.findOne({
+        where: { id: cartId, user_id: userId },
+        include: [Product], // Need product stock info
+      });
+      if (!cartItem) {
+        throw CustomError.notFound("Cart item not found");
+      }
 
-    if (!cartItem) {
-      throw CustomError.notFound("Cart item not found");
+      // Verify sufficient stock for new quantity
+      if (cartItem.Product.stock < quantity) {
+        throw CustomError.badRequest("Insufficient stock available");
+      }
+
+      // Update cart item quantity
+      await cartItem.update({ quantity });
+
+      // Invalidate cache
+      await invalidationService.invalidateUser(userId);
+
+      return cartItem; // Return updated cart item
+    } else if (sessionId) {
+      const guestCart =
+        (await sessionService.getData(sessionId, "cart", "items")) || [];
+
+      const itemIndex = guestCart.findIndex((item) => item.id === cartId);
+      if (itemIndex === -1) {
+        throw CustomError.notFound("Cart item not found");
+      }
+
+      // check stock
+      const product = await Product.findByPk(guestCart[itemIndex].product_id);
+      if (!product || product.stock < quantity) {
+        throw CustomError.badRequest("Insufficient stock available");
+      }
+
+      guestCart[itemIndex].quantity = quantity;
+      await sessionService.setData(sessionId, "cart", "items", guestCart);
+      return guestCart[itemIndex];
     }
 
-    // Verify sufficient stock for new quantity
-    if (cartItem.Product.stock < quantity) {
-      throw CustomError.badRequest("Insufficient stock available");
-    }
-
-    // Update cart item quantity
-    await cartItem.update({ quantity });
-    return cartItem; // Return updated cart item
+    throw CustomError.badRequest("User identification required");
   }
 
   // Remove specific item from user's cart
   // Only user who owns the cart item can remove it
-  async removeFromCart(cartId, userId) {
-    // Find and verify cart item belongs to user
-    const item = await Cart.findOne({
-      where: { id: cartId, user_id: userId },
-    });
+  async removeFromCart(cartId, userId, sessionId = null) {
+    if (userId) {
+      // Find and verify cart item belongs to user
+      const item = await Cart.findOne({
+        where: { id: cartId, user_id: userId },
+      });
 
-    if (!item) {
-      throw CustomError.notFound("Cart item not found");
+      if (!item) {
+        throw CustomError.notFound("Cart item not found");
+      }
+
+      // Delete cart item
+      await item.destroy();
+
+      // invalidate the cache
+      await invalidationService.invalidateUser(userId);
+
+      return { message: "Product removed from cart" };
+    } // Guest user
+    else if (sessionId) {
+      const guestCart =
+        (await sessionService.getData(sessionId, "cart", "items")) || [];
+      const filteredCart = guestCart.filter((item) => item.id !== cartId);
+
+      if (filteredCart.length === guestCart.length) {
+        throw CustomError.notFound("Cart item not found");
+      }
+
+      await sessionService.setData(sessionId, "cart", "items", filteredCart);
+      return { message: "Product removed from cart" };
     }
 
-    // Delete cart item
-    await item.destroy();
-
-    return { message: "Product removed from cart" };
+    throw CustomError.badRequest("User identification required");
   }
 
   // Clear all items from user's cart
   // Used after successful order placement
-  async clearCart(userId) {
-    // Delete all cart records for user in single operation
-    await Cart.destroy({ where: { user_id: userId } });
+  async clearCart(userId, sessionId = null) {
+    // Authenticated user
+    if (userId) {
+      await Cart.destroy({ where: { user_id: userId } });
 
-    return { message: "Cart cleared successfully" };
+      // Invalidate cache
+      await invalidationService.invalidateUser(userId);
+
+      return { message: "Cart cleared successfully" };
+    }
+
+    // Guest user
+    else if (sessionId) {
+      await sessionService.deleteData(sessionId, "cart", "items");
+      return { message: "Cart cleared successfully" };
+    }
+
+    throw CustomError.badRequest("User identification required");
+  }
+
+  // merge guest cart with user cart after login
+
+  async mergeCarts(userId, sessionId) {
+    if (!userId || !sessionId) {
+      throw CustomError.badRequest("User ID and Session Id are required");
+    }
+    // Get guest cart
+    const guestCart =
+      (await sessionService.getData(sessionId, "cart", "items")) || [];
+    if (guestCart.length === 0) {
+      return { message: "No guest cart to merge", merged: 0 };
+    }
+    let mergeCount = 0;
+    let skippedCount = 0;
+    // process each guest cart item
+    for (const guestItem of guestCart) {
+      try {
+        const product = await Product.findByPk(guestItem.product_id);
+
+        if (!product) {
+          skippedCount++;
+          continue;
+        }
+        // Check if product already exists in user's cart
+        const [cartItem, created] = await Cart.findOrCreate({
+          where: { user_id: userId, product_id: guestItem.product_id },
+          defaults: { quantity: guestItem.quantity },
+        });
+
+        if (!created) {
+          // Merge quantities, but don't exceed stock
+          const mergedQuantity = Math.min(
+            cartItem.quantity + guestItem.quantity,
+            product.stock,
+          );
+          await cartItem.update({ quantity: mergedQuantity });
+        }
+
+        mergeCount++;
+      } catch (error) {
+        console.error(`Failed to merge item ${guestItem.product_id}:`, error);
+        skippedCount++;
+      }
+    }
+    // Clear guest cart after successful merge
+    await sessionService.deleteData(sessionId, "cart", "items");
+
+    // also cache clear
+    const productKeys = await redisClient.keys(
+      `session:${sessionId}:cart:product_*`,
+    );
+    if (productKeys.length > 0) {
+      await redisClient.del(productKeys);
+    }
+
+    // Invalidate user cache
+    await invalidationService.invalidateUser(userId);
+
+    return {
+      message: "Cart merged successfully",
+      merged: mergeCount,
+      skipped: skippedCount,
+    };
+  }
+
+  // get cart count for nav/badge
+  async getCartCount(userId = null, sessionId = null) {
+    if (userId) {
+      const count = await Cart.count({ where: { user_id: userId } });
+      return count;
+    } else if (sessionId) {
+      const guestCart =
+        (await sessionService.getData(sessionId, "cart", "items")) || [];
+      return guestCart.length;
+    }
+    return 0;
   }
 }
 

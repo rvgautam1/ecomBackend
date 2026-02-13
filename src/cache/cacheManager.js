@@ -11,20 +11,37 @@ class CacheManager {
     await redisClient.setEx(key, ttl + jitter, JSON.stringify(value));
   }
 
-  async del(key) {
-    await redisClient.del(key);
-  }
+async del(key) {
+  if (!key) return;
+  await redisClient.del(key);
+}
 
-  async delByPattern(pattern) {
-    const iterator = redisClient.scanIterator({
-      MATCH: pattern,
-      COUNT: 100,
-    });
 
-    for await (const key of iterator) {
-      await redisClient.del(key);
+
+async delByPattern(pattern) {
+  const iterator = redisClient.scanIterator({
+    MATCH: pattern,
+    COUNT: 100,
+  });
+
+  let keysToDelete = [];
+
+  for await (const keys of iterator) {
+    if (!keys) continue;
+
+    if (Array.isArray(keys)) {
+      keysToDelete.push(...keys);
+    } else {
+      keysToDelete.push(keys);
     }
   }
+
+  if (keysToDelete.length) {
+    await redisClient.del(keysToDelete);
+  }
+}
+
+
 
   async exists(key) {
     return await redisClient.exists(key);
