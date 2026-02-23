@@ -8,5 +8,5 @@ export const cacheKeys = {
 
   sessionFeature: (sessionId, feature) => `session:${sessionId}:${feature}`,
 
-  lock: (key) => `lock:${key}`, // distributed locking 
+  lock: (key) => `lock:${key}`, // distributed locking
 };

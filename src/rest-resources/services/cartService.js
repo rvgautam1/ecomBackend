@@ -164,8 +164,7 @@ class CartService {
           let productdata = await sessionService.getData(
             sessionId,
             "cart",
-            `product_${Product}`
-            ,
+            `product_${Product}`,
           );
 
           // if not caches , fetch data from db
@@ -378,7 +377,6 @@ class CartService {
           );
           await cartItem.update({ quantity: mergedQuantity });
         }
-
         mergeCount++;
       } catch (error) {
         console.error(`Failed to merge item ${guestItem.product_id}:`, error);

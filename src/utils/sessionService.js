@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import redisClient from '../config/redis.js';
 
 class SessionService {
-  // ============ CORE SESSION MANAGEMENT ============
+  
   
   generateSessionId() {
     const timestamp = Date.now();
@@ -15,7 +15,7 @@ class SessionService {
     
     if (!sessionId) {
       sessionId = this.generateSessionId();
-      console.log(`🆕 New session: ${sessionId}`);
+      console.log(`New session: ${sessionId}`);
       
       this.trackSession(sessionId, req);
       
@@ -67,7 +67,8 @@ class SessionService {
     }
   }
 
-  // ============ GENERIC DATA STORAGE - FOR ANY SERVICE ============
+ // generic data storage for any service
+
   
   /**
    * Store ANY data for a session

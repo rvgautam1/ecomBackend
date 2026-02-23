@@ -194,6 +194,7 @@ class OrderService {
       where.user_id = userId;
     }
 
+    //eager load order items and product details in one query
     const order = await Order.findOne({
       where,
       include: [

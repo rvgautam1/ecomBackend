@@ -60,7 +60,7 @@ export const cacheMiddleware = (options = {}) => {
       if (cached) {
         console.log(`CACHE HIT: ${cacheKey}`);
 
-        // Helpful response headers for debugging
+        //  headers for debugging
         res.set("X-Cache", "HIT");
         res.set("X-Cache-Key", cacheKey);
         res.set("X-Cache-TTL", ttl);
